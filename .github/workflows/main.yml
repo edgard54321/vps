@@ -3,29 +3,51 @@ name: Connect to Linux Server
 on: [push, workflow_dispatch]
 
 jobs:
-  build:
-
+  linux-server:
     runs-on: ubuntu-latest
-
+    
     steps:
-    - name: Download ngrok
-      run: wget https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-linux-amd64.tgz
-    - name: Extract ngrok
-      run: tar -xzf ngrok-v3-stable-linux-amd64.tgz
-    - name: Auth ngrok
-      run: ./ngrok authtoken $NGROK_AUTH_TOKEN
-      env:
-        NGROK_AUTH_TOKEN: ${{ secrets.NGROK_AUTH_TOKEN }}
-    - name: Setup SSH
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Download and setup ngrok
+      run: |
+        wget -q https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-linux-amd64.tgz
+        tar -xzf ngrok-v3-stable-linux-amd64.tgz
+        chmod +x ngrok
+        
+    - name: Authenticate ngrok
+      run: ./ngrok authtoken ${{ secrets.NGROK_AUTH_TOKEN }}
+      
+    - name: Setup SSH server
       run: |
         sudo apt-get update
         sudo apt-get install -y openssh-server
+        
+        # Configure SSH to allow password authentication
+        sudo sed -i 's/#PasswordAuthentication yes/PasswordAuthentication yes/' /etc/ssh/sshd_config
+        sudo sed -i 's/PasswordAuthentication no/PasswordAuthentication yes/' /etc/ssh/sshd_config
+        sudo sed -i 's/#PermitRootLogin prohibit-password/PermitRootLogin yes/' /etc/ssh/sshd_config
+        
+        # Set root password (use a strong password in production)
+        echo "root:Password123!" | sudo chpasswd
+        
+        # Start SSH service
         sudo systemctl enable ssh
         sudo systemctl start ssh
-        sudo sed -i 's/#PasswordAuthentication yes/PasswordAuthentication yes/' /etc/ssh/sshd_config
         sudo systemctl restart ssh
-    - name: Set SSH password
+        
+    - name: Start ngrok tunnel for SSH
       run: |
-        echo "runneradmin:P@ssw0rd!" | sudo chpasswd
-    - name: Create Tunnel
-      run: ./ngrok tcp 22
+        # Start ngrok in background and get public URL
+        ./ngrok tcp 22 --log=stdout > ngrok.log &
+        sleep 10
+        
+        # Extract public URL from ngrok logs
+        NGROK_URL=$(curl -s http://localhost:4040/api/tunnels | jq -r '.tunnels[0].public_url')
+        echo "SSH accessible at: $NGROK_URL"
+        echo "Use: ssh root@[hostname] -p [port]"
+        echo "Password: Password123!"
+        
+        # Keep the workflow running to maintain the tunnel
+        while true; do sleep 60; done
