@@ -10,44 +10,79 @@ jobs:
     - name: Checkout code
       uses: actions/checkout@v4
       
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y curl jq
+        
     - name: Download and setup ngrok
       run: |
         wget -q https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-linux-amd64.tgz
         tar -xzf ngrok-v3-stable-linux-amd64.tgz
         chmod +x ngrok
-        
+
     - name: Authenticate ngrok
       run: ./ngrok authtoken ${{ secrets.NGROK_AUTH_TOKEN }}
-      
+
     - name: Setup SSH server
       run: |
-        sudo apt-get update
         sudo apt-get install -y openssh-server
-        
+
         # Configure SSH to allow password authentication
         sudo sed -i 's/#PasswordAuthentication yes/PasswordAuthentication yes/' /etc/ssh/sshd_config
         sudo sed -i 's/PasswordAuthentication no/PasswordAuthentication yes/' /etc/ssh/sshd_config
         sudo sed -i 's/#PermitRootLogin prohibit-password/PermitRootLogin yes/' /etc/ssh/sshd_config
-        
+
         # Set root password (use a strong password in production)
         echo "root:Password123!" | sudo chpasswd
-        
+
         # Start SSH service
         sudo systemctl enable ssh
         sudo systemctl start ssh
         sudo systemctl restart ssh
-        
-    - name: Start ngrok tunnel for SSH
+
+    - name: Start ngrok tunnel and display connection info
       run: |
-        # Start ngrok in background and get public URL
+        # Start ngrok in background
         ./ngrok tcp 22 --log=stdout > ngrok.log &
-        sleep 10
+        NGORK_PID=$!
+
+        # Wait for ngrok to start
+        sleep 5
         
-        # Extract public URL from ngrok logs
-        NGROK_URL=$(curl -s http://localhost:4040/api/tunnels | jq -r '.tunnels[0].public_url')
-        echo "SSH accessible at: $NGROK_URL"
-        echo "Use: ssh root@[hostname] -p [port]"
+        # Get the public URL
+        MAX_RETRIES=10
+        RETRY_COUNT=0
+
+        while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
+          NGROK_RESPONSE=$(curl -s http://localhost:4040/api/tunnels 2>/dev/null || true)
+
+          if [ ! -z "$NGROK_RESPONSE" ] && echo "$NGROK_RESPONSE" | jq -e '.tunnels[0].public_url' > /dev/null 2>&1; then
+            NGROK_URL=$(echo "$NGROK_RESPONSE" | jq -r '.tunnels[0].public_url')
+            # Extract hostname and port from ngrok URL
+            HOSTNAME=$(echo $NGROK_URL | sed 's/tcp:\/\///' | cut -d: -f1)
+            PORT=$(echo $NGROK_URL | sed 's/tcp:\/\///' | cut -d: -f2)
+            echo "========================================"
+            echo "SSH Connection Details:"
+            echo "Ngrok URL: $NGROK_URL"
+            echo "";
+            echo "EXACT SSH COMMAND TO USE:"
+            echo "ssh root@$HOSTNAME -p $PORT"
+            echo "";
         echo "Password: Password123!"
+            echo "========================================"
+            break
+          fi
         
-        # Keep the workflow running to maintain the tunnel
-        while true; do sleep 60; done
+          RETRY_COUNT=$((RETRY_COUNT+1))
+          sleep 2
+        done
+
+        if [ $RETRY_COUNT -eq $MAX_RETRIES ]; then
+          echo "Failed to get ngrok URL after $MAX_RETRIES attempts"
+          echo "Ngrok log:"
+          cat ngrok.log
+        fi
+
+        # Keep ngrok running
+        wait $NGORK_PID
