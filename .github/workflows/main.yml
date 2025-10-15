@@ -4,7 +4,7 @@ on: [push, workflow_dispatch]
 
 jobs:
   linux-server:
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     
     steps:
     - name: Checkout code
@@ -86,4 +86,3 @@ jobs:
 
         # Keep ngrok running
         wait $NGORK_PID
-
